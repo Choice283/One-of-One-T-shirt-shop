@@ -1,0 +1,32 @@
+datasource db {
+  // Switched from sqlite to postgresql for deployment — serverless hosts like
+  // Vercel don't have a persistent local disk, so the SQLite file would reset
+  // (or error) on every deploy. Use a hosted Postgres URL (Vercel Postgres,
+  // Neon, Supabase, etc.) in DATABASE_URL, both locally and in production.
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Each row is ONE physical, one-of-a-kind t-shirt.
+// Quantity is always 1 — once status flips to "sold" it disappears from the store.
+model Product {
+  id          String   @id @default(cuid())
+  title       String
+  description String
+  priceCents  Int
+  size        String // e.g. S, M, L, XL, XXL
+  condition   String? // e.g. "New", "Like New", "Vintage"
+  images      String // JSON-encoded array of image paths, e.g. ["/uploads/abc/1.jpg"]
+
+  // available -> pending (checkout in progress) -> sold
+  // pending reverts to available automatically if the Stripe session expires
+  status String @default("available")
+
+  stripeSessionId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
