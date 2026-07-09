@@ -9,7 +9,11 @@ import { parseImages } from '@/lib/format';
 // the same shirt. If the buyer abandons checkout, the "checkout.session.expired"
 // webhook flips it back to "available".
 export async function POST(req: NextRequest) {
-  const { productId } = await req.json();
+  const { productId, fulfillment } = await req.json();
+
+  // "delivery" ships the shirt (existing flow); "pickup" skips shipping
+  // entirely and just collects a name so Choice knows who's coming to grab it.
+  const fulfillmentMethod: 'delivery' | 'pickup' = fulfillment === 'pickup' ? 'pickup' : 'delivery';
 
   if (!productId) {
     return NextResponse.json({ error: 'Missing productId' }, { status: 400 });
@@ -56,34 +60,49 @@ export async function POST(req: NextRequest) {
           quantity: 1
         }
       ],
-      shipping_address_collection: {
-        allowed_countries: ['US', 'CA']
-      },
-      shipping_options: [
-        {
-          shipping_rate_data: {
-            type: 'fixed_amount',
-            fixed_amount: { amount: standardCents, currency: 'usd' },
-            display_name: 'Standard Shipping (5-7 business days)',
-            delivery_estimate: {
-              minimum: { unit: 'business_day', value: 5 },
-              maximum: { unit: 'business_day', value: 7 }
-            }
+      // Delivery collects a shipping address and offers Standard/Express rates.
+      // Pickup skips all of that — instead we ask for a name via a custom
+      // field so Choice knows who to expect in person. Email is collected by
+      // Stripe Checkout automatically either way, no extra config needed.
+      ...(fulfillmentMethod === 'delivery'
+        ? {
+            shipping_address_collection: { allowed_countries: ['US', 'CA'] },
+            shipping_options: [
+              {
+                shipping_rate_data: {
+                  type: 'fixed_amount' as const,
+                  fixed_amount: { amount: standardCents, currency: 'usd' },
+                  display_name: 'Standard Shipping (5-7 business days)',
+                  delivery_estimate: {
+                    minimum: { unit: 'business_day' as const, value: 5 },
+                    maximum: { unit: 'business_day' as const, value: 7 }
+                  }
+                }
+              },
+              {
+                shipping_rate_data: {
+                  type: 'fixed_amount' as const,
+                  fixed_amount: { amount: expressCents, currency: 'usd' },
+                  display_name: 'Express Shipping (1-2 business days)',
+                  delivery_estimate: {
+                    minimum: { unit: 'business_day' as const, value: 1 },
+                    maximum: { unit: 'business_day' as const, value: 2 }
+                  }
+                }
+              }
+            ]
           }
-        },
-        {
-          shipping_rate_data: {
-            type: 'fixed_amount',
-            fixed_amount: { amount: expressCents, currency: 'usd' },
-            display_name: 'Express Shipping (1-2 business days)',
-            delivery_estimate: {
-              minimum: { unit: 'business_day', value: 1 },
-              maximum: { unit: 'business_day', value: 2 }
-            }
-          }
-        }
-      ],
-      metadata: { productId: product.id },
+        : {
+            custom_fields: [
+              {
+                key: 'pickup_name',
+                label: { type: 'custom' as const, custom: 'Name for pickup' },
+                type: 'text' as const,
+                optional: false
+              }
+            ]
+          }),
+      metadata: { productId: product.id, fulfillment: fulfillmentMethod },
       // Stripe requires this to be MORE than 1800 seconds out — 30 min exactly
       // can land right on the boundary and get rejected, so we pad to 40 min.
       expires_at: Math.floor(Date.now() / 1000) + 40 * 60,
