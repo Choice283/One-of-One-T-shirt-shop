@@ -45,9 +45,19 @@ export async function POST(req: NextRequest) {
         // creating the delivery straight from the Uber Direct dashboard).
         if (fulfillment === 'delivery') {
           try {
-            const address = session.shipping_details?.address;
-            const phone = session.customer_details?.phone;
-            const name = session.shipping_details?.name ?? session.customer_details?.name;
+            // Re-fetch the session through our own Stripe client (pinned to
+            // apiVersion '2024-06-20' in lib/stripe.ts) instead of trusting
+            // the raw webhook payload. Webhook endpoints serialize events
+            // using whatever API version is configured on the endpoint
+            // itself (often your account's current default, which can be
+            // much newer than what our SDK expects) — Stripe has moved
+            // shipping/customer fields around across versions, so relying
+            // on the raw event object here is fragile. Explicitly retrieving
+            // through our pinned client guarantees the shape below.
+            const fullSession = await stripe.checkout.sessions.retrieve(session.id);
+            const address = fullSession.shipping_details?.address;
+            const phone = fullSession.customer_details?.phone;
+            const name = fullSession.shipping_details?.name ?? fullSession.customer_details?.name;
 
             if (!address || !address.line1 || !address.city || !address.state || !address.postal_code) {
               throw new Error('Stripe session is missing a complete shipping address');
