@@ -3,6 +3,7 @@ import Stripe from 'stripe';
 import { prisma } from '@/lib/prisma';
 import { stripe } from '@/lib/stripe';
 import { createUberDelivery, createUberQuote } from '@/lib/uberDirect';
+import { sendDeliveryFailureAlert } from '@/lib/email';
 
 // Stripe needs the raw request body to verify the webhook signature,
 // so we must disable Next's default body parsing for this route.
@@ -44,6 +45,10 @@ export async function POST(req: NextRequest) {
         // the deliveryError and dispatch the courier manually (e.g. by
         // creating the delivery straight from the Uber Direct dashboard).
         if (fulfillment === 'delivery') {
+          // Looked up outside the try block so it's available in the catch
+          // too, for the failure alert email.
+          const product = await prisma.product.findUnique({ where: { id: productId } });
+
           try {
             // Re-fetch the session through our own Stripe client (pinned to
             // apiVersion '2024-06-20' in lib/stripe.ts) instead of trusting
@@ -65,8 +70,6 @@ export async function POST(req: NextRequest) {
             if (!phone) {
               throw new Error('Stripe session is missing a dropoff phone number');
             }
-
-            const product = await prisma.product.findUnique({ where: { id: productId } });
 
             const dropoffAddress = {
               streetAddress: [address.line1, address.line2].filter((line): line is string => Boolean(line)),
@@ -103,6 +106,11 @@ export async function POST(req: NextRequest) {
             await prisma.product.update({
               where: { id: productId },
               data: { deliveryError: message }
+            });
+            await sendDeliveryFailureAlert({
+              productId,
+              productTitle: product?.title ?? 'Unknown shirt',
+              error: message
             });
           }
         }
