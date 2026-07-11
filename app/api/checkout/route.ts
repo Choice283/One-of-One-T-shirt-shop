@@ -35,8 +35,16 @@ export async function POST(req: NextRequest) {
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL ?? 'http://localhost:3000';
   const images = parseImages(product.images);
 
-  const standardCents = Number(process.env.SHIPPING_STANDARD_CENTS ?? 599);
-  const expressCents = Number(process.env.SHIPPING_EXPRESS_CENTS ?? 1499);
+  // Flat local-courier fee charged at checkout. The *actual* Uber Direct
+  // delivery (with its own real-time quote) is created after payment
+  // succeeds, in the webhook — see app/api/webhook/route.ts. We charge a
+  // flat rate here because Uber Direct needs the buyer's address to price a
+  // real quote, and Stripe only collects that address inside its own
+  // checkout page, after this session already exists. If the real Uber
+  // Direct fee ends up higher than this flat rate on some orders, that's a
+  // cost Choice eats for now — a future upgrade could collect the address
+  // first and quote before charging.
+  const localDeliveryCents = Number(process.env.UBER_DELIVERY_FLAT_CENTS ?? 899);
 
   try {
     const session = await stripe.checkout.sessions.create({
@@ -60,33 +68,24 @@ export async function POST(req: NextRequest) {
           quantity: 1
         }
       ],
-      // Delivery collects a shipping address and offers Standard/Express rates.
-      // Pickup skips all of that — instead we ask for a name via a custom
-      // field so Choice knows who to expect in person. Email is collected by
-      // Stripe Checkout automatically either way, no extra config needed.
+      // Delivery collects a shipping address and charges the flat local-courier
+      // fee — restricted to US only since Uber Direct couriers operate within
+      // a single metro, not cross-border or long-distance. Pickup skips all of
+      // that — instead we ask for a name via a custom field so Choice knows
+      // who to expect in person. Email is collected by Stripe Checkout
+      // automatically either way, no extra config needed.
       ...(fulfillmentMethod === 'delivery'
         ? {
-            shipping_address_collection: { allowed_countries: ['US', 'CA'] },
+            shipping_address_collection: { allowed_countries: ['US'] },
             shipping_options: [
               {
                 shipping_rate_data: {
                   type: 'fixed_amount' as const,
-                  fixed_amount: { amount: standardCents, currency: 'usd' },
-                  display_name: 'Standard Shipping (5-7 business days)',
+                  fixed_amount: { amount: localDeliveryCents, currency: 'usd' },
+                  display_name: 'Local Courier Delivery (via Uber Direct, same-day)',
                   delivery_estimate: {
-                    minimum: { unit: 'business_day' as const, value: 5 },
-                    maximum: { unit: 'business_day' as const, value: 7 }
-                  }
-                }
-              },
-              {
-                shipping_rate_data: {
-                  type: 'fixed_amount' as const,
-                  fixed_amount: { amount: expressCents, currency: 'usd' },
-                  display_name: 'Express Shipping (1-2 business days)',
-                  delivery_estimate: {
-                    minimum: { unit: 'business_day' as const, value: 1 },
-                    maximum: { unit: 'business_day' as const, value: 2 }
+                    minimum: { unit: 'hour' as const, value: 1 },
+                    maximum: { unit: 'hour' as const, value: 3 }
                   }
                 }
               }
@@ -102,6 +101,9 @@ export async function POST(req: NextRequest) {
               }
             ]
           }),
+      // Uber Direct requires a dropoff phone number, so we collect it for
+      // delivery orders (not needed for in-person pickup).
+      ...(fulfillmentMethod === 'delivery' ? { phone_number_collection: { enabled: true } } : {}),
       metadata: { productId: product.id, fulfillment: fulfillmentMethod },
       // Stripe requires this to be MORE than 1800 seconds out — 30 min exactly
       // can land right on the boundary and get rejected, so we pad to 40 min.
@@ -112,7 +114,7 @@ export async function POST(req: NextRequest) {
 
     await prisma.product.update({
       where: { id: product.id },
-      data: { status: 'pending', stripeSessionId: session.id }
+      data: { status: 'pending', stripeSessionId: session.id, fulfillment: fulfillmentMethod }
     });
 
     return NextResponse.json({ url: session.url });

@@ -12,6 +12,43 @@ const statusStyles: Record<string, string> = {
   sold: 'bg-neutral-200 text-neutral-600'
 };
 
+// Only rendered for sold "delivery" orders — shows whether the Uber Direct
+// courier was successfully dispatched by the webhook. "Failed" means
+// payment succeeded but the Uber Direct call errored, so Choice needs to
+// create the delivery by hand from the Uber Direct dashboard (hover the
+// badge for the error message).
+function CourierBadge({ trackingUrl, error }: { trackingUrl: string | null; error: string | null }) {
+  if (trackingUrl) {
+    return (
+      <a
+        href={trackingUrl}
+        target="_blank"
+        rel="noreferrer"
+        className="rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-blue-800 underline"
+      >
+        Courier dispatched
+      </a>
+    );
+  }
+
+  if (error) {
+    return (
+      <span
+        className="rounded-full bg-red-100 px-2 py-1 text-xs font-medium text-red-800"
+        title={error}
+      >
+        Courier failed
+      </span>
+    );
+  }
+
+  return (
+    <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-medium text-amber-800">
+      Courier pending
+    </span>
+  );
+}
+
 export default async function AdminDashboard() {
   const products = await prisma.product.findMany({ orderBy: { createdAt: 'desc' } });
 
@@ -42,6 +79,9 @@ export default async function AdminDashboard() {
               <span className={`rounded-full px-2 py-1 text-xs font-medium ${statusStyles[product.status]}`}>
                 {product.status}
               </span>
+              {product.status === 'sold' && product.fulfillment === 'delivery' && (
+                <CourierBadge trackingUrl={product.uberTrackingUrl} error={product.deliveryError} />
+              )}
               <StatusControls productId={product.id} status={product.status} />
             </div>
           );

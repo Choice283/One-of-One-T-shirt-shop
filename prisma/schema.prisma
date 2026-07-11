@@ -27,6 +27,22 @@ model Product {
   status String @default("available")
 
   stripeSessionId String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+
+  // "delivery" or "pickup", set at checkout time. Nullable because rows sold
+  // before this field existed won't have it — the admin UI treats a missing
+  // value as "unknown, don't show courier status".
+  fulfillment String?
+
+  // Uber Direct courier delivery (set once payment succeeds and we've
+  // handed the order off to Uber Direct — see app/api/webhook/route.ts).
+  // uberDeliveryId is Uber's delivery id (e.g. "del_..."), uberTrackingUrl
+  // is the live tracking link shown on the success page. deliveryError is
+  // only set if the Uber Direct call fails after payment already went
+  // through, so Choice can spot it and dispatch manually.
+  uberDeliveryId  String?
+  uberTrackingUrl String?
+  deliveryError   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
